@@ -25,8 +25,13 @@ class BlockChain:
     def __init__(self):
         self.chain = []
         self.current_transactions = []
+        self.nodes = set()
 
         self.new_block(proof=1000, previous_hash=1)
+
+    def register_node(self, address: str):
+        parsed_url = urlparse(address)
+        self.nodes.add(parsed_url.netloc)
 
     def new_block(self, proof, previous_hash=None):
         block = {
@@ -127,6 +132,24 @@ def full_chain():
     response = {
         'chain': blockChain.chain,
         'length': len(blockChain.chain)
+    }
+    return jsonify(response), 201
+
+
+@app.route('/nodes/register', methods=['POST'])
+def register_nodes():
+    values = request.get_json()
+
+    nodes = values.get('nodes')
+    if nodes is None:
+        return 'Error: please supply a valid list of nodes', 400
+
+    for node in nodes:
+        blockChain.register_node(node)
+
+    response = {
+        'message': 'New nodes have been added',
+        'nodes': list(blockChain.nodes)
     }
     return jsonify(response), 201
 
