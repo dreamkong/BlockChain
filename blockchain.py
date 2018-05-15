@@ -14,10 +14,13 @@
 import hashlib
 import json
 from time import time
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import requests
 from flask import Flask, jsonify, request
+from argparse import ArgumentParser
 
 
 class BlockChain:
@@ -32,6 +35,55 @@ class BlockChain:
     def register_node(self, address: str):
         parsed_url = urlparse(address)
         self.nodes.add(parsed_url.netloc)
+
+    def valid_chain(self, chain: List[Dict[str, Any]]) -> bool:
+        last_block = chain[0]
+        current_index = 1
+
+        while current_index < len(chain):
+            block = chain[current_index]
+
+            if block['previous_hash'] != self.hash(last_block):
+                return False
+
+            if not self.valid_proof(last_block['proof'], block['proof']):
+                return False
+
+            last_block = block
+            current_index += 1
+
+        return True
+
+    def resolve_conflicts(self) -> bool:
+        """
+        共识算法解决冲突
+        使用网络中最长的链.
+
+        :return:  如果链被取代返回 True, 否则为False
+        """
+
+        neighbours = self.nodes
+
+        max_length = len(self.chain)
+        new_chain = None
+
+        for node in neighbours:
+            response = requests.get(f'http://{node}/chain')
+
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+                print('length', length)
+
+                if length > max_length and self.valid_chain(chain):
+                    max_length = length
+                    new_chain = chain
+
+        if new_chain:
+            self.chain = new_chain
+            return True
+
+        return False
 
     def new_block(self, proof, previous_hash=None):
         block = {
@@ -100,7 +152,8 @@ def new_transactions():
         return 'Missing values', 400
 
     # Create a new Transaction
-    index = blockChain.new_transaction(values['sender'], values['recipient'], values['amount'])
+    index = blockChain.new_transaction(
+        values['sender'], values['recipient'], values['amount'])
 
     response = {'message': f'Transaction will be added to Block {index}'}
     return jsonify(response), 201
@@ -109,7 +162,7 @@ def new_transactions():
 @app.route('/mine', methods=['GET'])
 def mine():
     last_block = blockChain.last_block
-    last_proof = blockChain.last_block['proof']
+    last_proof = last_block['proof']
     proof = blockChain.proof_of_work(last_proof)
 
     blockChain.new_transaction(sender="0",
@@ -124,7 +177,7 @@ def mine():
         "proof": block['proof'],
         "previous_hash": block['previous_hash']
     }
-    return jsonify(response), 201
+    return jsonify(response), 200
 
 
 @app.route('/chain', methods=['GET'])
@@ -133,7 +186,7 @@ def full_chain():
         'chain': blockChain.chain,
         'length': len(blockChain.chain)
     }
-    return jsonify(response), 201
+    return jsonify(response), 200
 
 
 @app.route('/nodes/register', methods=['POST'])
@@ -154,7 +207,31 @@ def register_nodes():
     return jsonify(response), 201
 
 
+@app.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    replaced = blockChain.resolve_conflicts()
+
+    if replaced:
+        response = {
+            'message': 'Our chain was replaced',
+            'new_chain': blockChain.chain
+        }
+    else:
+        response = {
+            'message': 'Our chain is authoritative',
+            'chain': blockChain.chain
+        }
+
+    return jsonify(response), 200
+
+
 if __name__ == '__main__':
     # testPow = BlockChain()
     # testPow.proof_of_work(100)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    parser = ArgumentParser()
+    parser.add_argument('-p', '--port', default=5000,
+                        type=int, help='port to listen to')
+    args = parser.parse_args()
+    port = args.port
+
+    app.run(host='0.0.0.0', port=port, debug=True)
